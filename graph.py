@@ -1,66 +1,137 @@
+import json
+import random
+import sys
+
 import networkx as nx
 import matplotlib.pyplot as plt
-from pprint import pprint
+from sklearn.cluster import KMeans
 
 # Define the OS3E Graph
-def OS3EGraph():
+def build_graph():
     g = nx.Graph()
     nx.add_path(g, ["Vancouver", "Seattle"])
     nx.add_path(g, ["Seattle", "Missoula", "Minneapolis", "Chicago"])
     nx.add_path(g, ["Seattle", "Salt Lake City"])
-    nx.add_path(g, ["Seattle", "Portland", "Sunnyvale, CA"])
-    nx.add_path(g, ["Sunnyvale, CA", "Salt Lake City"])
-    nx.add_path(g, ["Sunnyvale, CA", "Los Angeles"])
+    nx.add_path(g, ["Seattle", "Portland", "Sunnyvale"])
+    nx.add_path(g, ["Sunnyvale", "Salt Lake City"])
+    nx.add_path(g, ["Sunnyvale", "Los Angeles"])
     nx.add_path(g, ["Los Angeles", "Salt Lake City"])
-    nx.add_path(g, ["Los Angeles", "Tucson", "El Paso, TX"])
+    nx.add_path(g, ["Los Angeles", "Tucson", "El Paso"])
     nx.add_path(g, ["Salt Lake City", "Denver"])
-    nx.add_path(g, ["Denver", "Albuquerque", "El Paso, TX"])
-    nx.add_path(g, ["Denver", "Kansas City, MO", "Chicago"])
-    nx.add_path(g, ["Kansas City, MO", "Dallas", "Houston"])
-    nx.add_path(g, ["El Paso, TX", "Houston"])
-    nx.add_path(g, ["Houston", "Jackson, MS", "Memphis", "Nashville"])
+    nx.add_path(g, ["Denver", "Albuquerque", "El Paso"])
+    nx.add_path(g, ["Denver", "Kansas City", "Chicago"])
+    nx.add_path(g, ["Kansas City", "Dallas", "Houston"])
+    nx.add_path(g, ["El Paso", "Houston"])
+    nx.add_path(g, ["Houston", "Jackson", "Memphis", "Nashville"])
     nx.add_path(g, ["Houston", "Baton Rouge", "Jacksonville"])
     nx.add_path(g, ["Chicago", "Indianapolis", "Louisville", "Nashville"])
     nx.add_path(g, ["Nashville", "Atlanta"])
     nx.add_path(g, ["Atlanta", "Jacksonville"])
     nx.add_path(g, ["Jacksonville", "Miami"])
     nx.add_path(g, ["Chicago", "Cleveland"])
-    nx.add_path(g, ["Cleveland", "Buffalo", "Boston", "New York", "Philadelphia", "Washington DC"])
-    nx.add_path(g, ["Cleveland", "Pittsburgh", "Ashburn, VA", "Washington DC"])
-    nx.add_path(g, ["Washington DC", "Raleigh, NC", "Atlanta"])
+    nx.add_path(g, ["Cleveland", "Buffalo", "Boston", "New York", "Philadelphia", "Washington"])
+    nx.add_path(g, ["Cleveland", "Pittsburgh", "Ashburn", "Washington"])
+    nx.add_path(g, ["Washington", "Raleigh", "Atlanta"])
     return g
 
-# Create the graph
-graph = OS3EGraph()
+def load_latlong(file_path):
+    with open(file_path, "r") as f:
+        return json.load(f)
 
-# Define the node mapping based on Table 3
-node_mapping = {
-    "Boston": 1, "New York": 2, "Philadelphia": 3, "Washington DC": 4, "Ashburn, VA": 5,
-    "Pittsburgh": 6, "Cleveland": 7, "Buffalo": 8, "Raleigh, NC": 9, "Indianapolis": 10,
-    "Chicago": 11, "Miami": 12, "Jacksonville": 13, "Atlanta": 14, "Louisville": 15,
-    "Nashville": 16, "Minneapolis": 17, "Kansas City, MO": 18, "Memphis": 19, "Jackson, MS": 20,
-    "Baton Rouge": 21, "Dallas": 22, "Denver": 23, "Albuquerque": 24, "El Paso, TX": 25,
-    "Houston": 26, "Salt Lake City": 27, "Tucson": 28, "Los Angeles": 29, "Sunnyvale, CA": 30,
-    "Portland": 31, "Seattle": 32, "Missoula": 33, "Vancouver": 34
-}
+def validate_positions(graph, latlong):
+    """Ensure that positions are defined only for nodes present in the graph."""
+    valid_positions = {}
+    for node in graph.nodes:
+        print (node)
+        if node in latlong:
+            valid_positions[node] = (float(latlong[node]["Longitude"]), float(latlong[node]["Latitude"]))
+        else:
+            print(f"Warning: No lat/long data for node '{node}'. It will be excluded from the plot.")
+    return valid_positions
 
-# Use node numbers from Table 3 as labels
-labels = {node: node_mapping[node] for node in graph.nodes()}
+def apply_kmeans(pos, num_clusters):
+    """Apply K-means clustering to the node positions."""
+    data = list(pos.values())
+    kmeans = KMeans(n_clusters=num_clusters, random_state=42)
+    kmeans.fit(data)
+    clusters = kmeans.labels_
+    return {node: clusters[i] for i, node in enumerate(pos.keys())}
 
-# Draw the graph with improved visualization settings
-plt.figure(figsize=(14, 10))
-pos = nx.spring_layout(graph, seed=42)
 
-# Draw nodes with increased size and distinct color
-nx.draw_networkx_nodes(graph, pos, node_size=800, node_color="lightblue")
+# Main function
+def main():
+    # Path to the JSON file
+    json_file_path = "latlong.json"
 
-# Draw edges with increased width for better visibility
-nx.draw_networkx_edges(graph, pos, edge_color="gray", width=1.5)
+    # Load latitude and longitude data
+    latlong = load_latlong(json_file_path)
 
-# Draw labels with Table 3 numbers
-nx.draw_networkx_labels(graph, pos, labels=labels, font_size=10, font_weight="bold", font_color="darkblue")
+    # Create the graph
+    graph = build_graph()
 
-# Title and display
-plt.title("OS3E Network Topology with Table 3 Node Numbers", fontsize=16)
-plt.axis("off")  # Turn off axis for a cleaner look
-plt.show()
+    # Validate positions
+    pos = validate_positions(graph, latlong)
+    print(pos)
+    num_clusters = 5  # Adjust this to the desired number of clusters
+    clusters = apply_kmeans(pos, num_clusters)
+
+    data = list(pos.values())
+    kmeans = KMeans(n_clusters=num_clusters)
+    kmeans.fit(data)
+    clusters = {node: kmeans.labels_[i] for i, node in enumerate(pos.keys())}
+    centroids = kmeans.cluster_centers_
+
+    # Ensure edges are only drawn if both nodes have valid positions
+    edges_to_draw = [
+        (u, v) for u, v in graph.edges if u in pos and v in pos
+    ]
+
+    # Draw the graph with geographic positions
+    plt.figure(figsize=(14, 10))
+    colors = ["red", "blue", "green", "purple", "orange"]
+
+    # Draw nodes with cluster colors
+    for cluster_id in range(num_clusters):
+        # Filter nodes belonging to this cluster and present in pos
+        cluster_nodes = [node for node in clusters if clusters[node] == cluster_id]
+        cluster_pos = {node: pos[node] for node in cluster_nodes}
+
+        # Debugging output
+        print(f"Cluster {cluster_id}: {cluster_pos}")
+
+        # Draw the nodes in this cluster
+        nx.draw_networkx_nodes(
+            G=graph,
+            pos=cluster_pos,
+            nodelist=cluster_nodes,
+            node_size=800,
+            node_color=colors[cluster_id % len(colors)],
+            label=f"Cluster {cluster_id}"
+        )
+        print(f"Cluster {cluster_id} drawn successfully.")
+
+    # Draw edges
+    nx.draw_networkx_edges(graph, pos, edgelist=edges_to_draw, edge_color="gray", width=1.5)
+
+    # Draw node labels
+    nx.draw_networkx_labels(graph, pos, font_size=10, font_weight="bold", font_color="black")
+
+    for idx, centroid in enumerate(centroids):
+        plt.scatter(
+            centroid[0], centroid[1],
+            color="black",
+            s=200,
+            marker="x",
+            label=f"Centroid {idx}"
+        )
+
+
+    # Title and legend
+    plt.title("OS3E Network Topology with K-Means Clustering", fontsize=16)
+    plt.legend(scatterpoints=1, loc="upper left")
+    plt.axis("off")  # Turn off axis for a cleaner look
+    plt.show()
+
+# Run the main function
+if __name__ == "__main__":
+    main()
