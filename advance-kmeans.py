@@ -128,7 +128,7 @@ def initialize_centroids(graph, shortest_paths):
 def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
     """
     Advanced K-Means algorithm that calculates the next centroid and
-    recomputes the final centroid for each cluster in the same while loop.
+    iteratively refines the current centroid until stabilization.
 
     Args:
         graph (networkx.Graph): The network topology as a graph.
@@ -144,11 +144,11 @@ def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
     centroids = [first_centroid]  # Start with the first centroid
     print(f"Initial Centroid: {first_centroid}")
 
-    # Step 2: Initialize clusters with the first centroid
+    # Step 2: Assign nodes to clusters with the first centroid
     clusters = assign_clusters(graph, centroids, shortest_paths)
     print(f"Initial clusters: {clusters}")
 
-    # Step 3: Iteratively calculate centroids and recompute final centroids
+    # Step 3: Iteratively calculate centroids and refine one at a time
     while len(centroids) < k:
         # Step 3.1: Calculate the next centroid
         candidate_nodes = [node for node in graph.nodes if node not in centroids]
@@ -159,28 +159,34 @@ def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
         centroids.append(next_centroid)
         print(f"Added new centroid {next_centroid}: {centroids}")
 
-        # Step 3.2: Assign nodes to clusters based on the updated centroids
+        # Step 3.2: Assign clusters for the new centroid (before refinement)
         clusters = assign_clusters(graph, centroids, shortest_paths)
-        print(f"Updated clusters with {len(centroids)} centroids: {clusters}")
+        current_cluster = clusters[next_centroid]  # Focus on the latest added centroid
 
-        # Step 3.3: Recompute final centroids for each cluster
-        for cluster_centroid in centroids:
-            current_cluster = clusters[cluster_centroid]
+        # Step 3.3: Refine the current centroid until it stabilizes
+        while True:
+            # Identify valid candidates for the current cluster
             valid_candidates = [n for n in current_cluster if graph.degree[n] >= degree_threshold]
             if valid_candidates:
-                # Recompute the final centroid as the node with the minimum sum of distances
+                # Recompute the centroid for the current cluster
                 refined_centroid = min(
                     valid_candidates,
                     key=lambda n: sum(shortest_paths[n][other] for other in current_cluster)
                 )
-                # Update the centroid for this cluster
-                centroids[centroids.index(cluster_centroid)] = refined_centroid
-                print(f"Refined Centroid for Cluster {len(centroids)}: {refined_centroid}")
+
+                # Check if the centroid has stabilized
+                if refined_centroid == next_centroid:
+                    break  # Stop refining if the centroid is stable
+                next_centroid = refined_centroid  # Update the centroid for further refinement
+                centroids[-1] = refined_centroid  # Update the list of centroids
+                print(f"Refined Centroid for Cluster: {refined_centroid}")
 
     # Step 4: Final assignment of clusters
     clusters = assign_clusters(graph, centroids, shortest_paths)
 
     return centroids, clusters
+
+
 
 
 def calculate_degree_threshold(graph):
@@ -205,6 +211,38 @@ def calculate_degree_threshold(graph):
     print(f"Average Degree: {avg_degree}, Degree Threshold: {degree_threshold}")
     return degree_threshold
 
+def calculate_average_propagation_latency(clusters, centroids, shortest_paths, total_nodes):
+    """
+    Calculate the average propagation latency based on the 15th formula in the paper.
+
+    Args:
+        clusters (dict): A dictionary where keys are centroids, and values are lists of nodes assigned to each centroid.
+        centroids (list): A list of current centroids (controllers).
+        shortest_paths (dict): A dictionary of precomputed shortest path distances between all nodes.
+        total_nodes (int): Total number of nodes in the network (N).
+
+    Returns:
+        float: The average propagation latency across all clusters.
+    """
+    total_latency = 0  # Sum of all latencies
+    num_centroids = len(centroids)  # Number of controllers (K)
+
+    for centroid in centroids:
+        cluster_nodes = clusters[centroid]
+        for node in cluster_nodes:
+            # Add the shortest path distance from the node to its centroid
+            total_latency += shortest_paths[node][centroid]
+
+    # Formula: Average Latency = Total Latency / (N - K)
+    if total_nodes > num_centroids:
+        avg_latency = total_latency / (total_nodes - num_centroids)
+    else:
+        avg_latency = float('inf')  # Avoid division by zero or invalid state
+
+    return avg_latency
+
+
+
 def main():
     json_file_path = "latlong.json"
     latlong = load_latlong(json_file_path)
@@ -218,12 +256,16 @@ def main():
 
     degree_threshold = calculate_degree_threshold(weighted_graph)
     # Run Advanced K-Means
-    num_clusters = 4
+    num_clusters = 2
     centroids, clusters = advanced_kmeans(weighted_graph, num_clusters, shortest_paths, degree_threshold)
 
     print(f"Final Centroids: {centroids}")
     print(f"Clusters: {clusters}")
 
+    L1 = 1588.075
+    L = calculate_average_propagation_latency(clusters, centroids, shortest_paths, weighted_graph.number_of_nodes())
+    print(f"Average propagation latency: {calculate_average_propagation_latency(clusters, centroids, shortest_paths, weighted_graph.number_of_nodes())}")
+    print(f"cost/benefit ratio: {L1/L/num_clusters}")
     # Draw the graph with geographic positions
     pos = {node: (float(latlong[node]["Longitude"]), float(latlong[node]["Latitude"])) for node in weighted_graph.nodes}
     plt.figure(figsize=(14, 10))
