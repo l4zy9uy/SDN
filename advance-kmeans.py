@@ -1,9 +1,8 @@
 import json
 from pprint import pprint
-
 import networkx as nx
 import matplotlib.pyplot as plt
-from math import radians, sin, cos, sqrt, atan2
+from math import radians
 from sklearn.metrics.pairwise import haversine_distances
 def load_latlong(file_path):
     with open(file_path, "r") as f:
@@ -76,40 +75,6 @@ def build_weighted_graph(latlong):
 def compute_shortest_path_distances(weighted_graph):
     return dict(nx.all_pairs_dijkstra_path_length(weighted_graph, weight="weight"))
 
-
-# Select initial centroids based on node degree and distance
-def initialize_centroids(graph, k, shortest_paths):
-    node_degrees = dict(graph.degree())
-    pprint(node_degrees)
-    # Calculate node degrees
-    max_degree = max(node_degrees.values())  # Highest degree value
-    candidates = [node for node, degree in node_degrees.items() if degree == max_degree]
-
-    print("candidates: ", candidates)
-
-    print("\nCandidates with highest degree and their total shortest path distances:")
-    candidate_sums = {n: sum(shortest_paths[n].values()) for n in candidates}
-    for candidate, total_distance in candidate_sums.items():
-        print(f"Node: {candidate}, Total Distance: {total_distance}")
-
-    # Select the first centroid as the node with the minimum total shortest path distance
-    first_centroid = min(candidates, key=lambda n: candidate_sums[n])
-    print(f"\nFirst centroid selected: {first_centroid} with total distance: {candidate_sums[first_centroid]}")
-
-    centroids = [first_centroid]
-
-    # Select remaining centroids to maximize distance from existing centroids
-    while len(centroids) < k:
-        candidate_nodes = [node for node in graph.nodes if node not in centroids]
-        farthest_node = max(
-            candidate_nodes,
-            key=lambda n: sum(shortest_paths[n][c] for c in centroids)
-        )
-        centroids.append(farthest_node)
-
-    return centroids
-
-
 # Assign nodes to the nearest centroid
 def assign_clusters(graph, centroids, shortest_paths):
     clusters = {centroid: [] for centroid in centroids}
@@ -123,28 +88,118 @@ def assign_clusters(graph, centroids, shortest_paths):
 
 
 # Recompute centroids based on cluster members
-def recompute_centroids(clusters, shortest_paths):
+def recompute_centroids(clusters, shortest_paths, graph, degree_threshold):
     new_centroids = []
     for centroid, nodes in clusters.items():
-        new_centroid = min(
-            nodes,
-            key=lambda n: sum(shortest_paths[n][other] for other in nodes)
-        )
-        new_centroids.append(new_centroid)
+        valid_candidates = [n for n in nodes if graph.degree[n] >= degree_threshold]
+        if valid_candidates:
+            new_centroid = min(
+                valid_candidates,
+                key=lambda n: sum(shortest_paths[n][other] for other in nodes)
+            )
+            new_centroids.append(new_centroid)
     return new_centroids
 
 
+# Select the first centroid based on node degree and shortest path distances
+def initialize_centroids(graph, shortest_paths):
+    # Calculate node degrees
+    node_degrees = dict(graph.degree())
+    pprint(node_degrees)
+
+    # Find nodes with the highest degree
+    max_degree = max(node_degrees.values())
+    candidates = [node for node, degree in node_degrees.items() if degree == max_degree]
+
+    print("Candidates with the highest degree:", candidates)
+
+    # Select the node with the minimum sum of shortest path distances
+    candidate_sums = {n: sum(shortest_paths[n].values()) for n in candidates}
+    for candidate, total_distance in candidate_sums.items():
+        print(f"Node: {candidate}, Total Distance: {total_distance}")
+
+    # First centroid is the one with the minimum total distance
+    first_centroid = min(candidates, key=lambda n: candidate_sums[n])
+    print(f"First centroid selected: {first_centroid}, Total Distance: {candidate_sums[first_centroid]}")
+
+    return first_centroid
+
 # Advanced K-Means Algorithm
-def advanced_kmeans(graph, k, shortest_paths):
-    centroids = initialize_centroids(graph, k, shortest_paths)
-    while True:
+def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
+    """
+    Advanced K-Means algorithm based on the corrected flow of Algorithm 2.
+
+    Args:
+        graph (networkx.Graph): The network topology as a graph.
+        k (int): Number of clusters (controllers).
+        shortest_paths (dict): Precomputed shortest path distances.
+        degree_threshold (int): Minimum degree required for centroid nodes.
+
+    Returns:
+        tuple: Final centroids and clusters.
+    """
+    # Step 1: Select the first centroid
+    first_centroid = initialize_centroids(graph, shortest_paths)
+    centroids = [first_centroid]  # Start with the first centroid
+    print(f"Initial Centroid: {first_centroid}")
+
+    # Step 2: Initialize clusters with the first centroid
+    clusters = assign_clusters(graph, centroids, shortest_paths)
+    print(f"Initial clusters: {clusters}")
+
+    # Step 3: Add remaining centroids iteratively
+    while len(centroids) < k:
+        # Assign nodes to clusters based on the current centroids
         clusters = assign_clusters(graph, centroids, shortest_paths)
-        new_centroids = recompute_centroids(clusters, shortest_paths)
-        if set(new_centroids) == set(centroids):
-            break
-        centroids = new_centroids
+
+        # Recompute the current cluster's centroid
+        for centroid in centroids:
+            current_cluster = clusters[centroid]
+            valid_candidates = [n for n in current_cluster if graph.degree[n] >= degree_threshold]
+            if valid_candidates:
+                new_centroid = min(
+                    valid_candidates,
+                    key=lambda n: sum(shortest_paths[n][other] for other in current_cluster)
+                )
+                centroids[centroids.index(centroid)] = new_centroid
+                print(f"Refined Centroid {centroid}: {new_centroid}")
+
+        # Select the next centroid
+        candidate_nodes = [node for node in graph.nodes if node not in centroids]
+        next_centroid = max(
+            candidate_nodes,
+            key=lambda n: min(shortest_paths[n][c] for c in centroids)  # Maximize min distance to existing centroids
+        )
+        centroids.append(next_centroid)
+        print(f"Added new centroid {next_centroid}: {centroids}")
+
+    # Step 4: Assign final clusters based on the k centroids
+    clusters = assign_clusters(graph, centroids, shortest_paths)
+
     return centroids, clusters
 
+
+def calculate_degree_threshold(graph):
+    """
+    Calculate the degree threshold for centroid selection based on the average node degree.
+
+    Args:
+        graph (networkx.Graph): The input graph representing the network topology.
+
+    Returns:
+        int: The degree threshold (rounded average degree of all nodes).
+    """
+    # Compute degrees of all nodes in the graph
+    degrees = dict(graph.degree())
+
+    # Calculate the average degree
+    avg_degree = sum(degrees.values()) / len(degrees)
+
+    # Round the average degree to the nearest integer
+    degree_threshold = round(avg_degree)
+
+    print(f"Average Degree: {avg_degree}, Degree Threshold: {degree_threshold}")
+    return degree_threshold
 
 def main():
     json_file_path = "latlong.json"
@@ -157,9 +212,10 @@ def main():
     shortest_paths = compute_shortest_path_distances(weighted_graph)
     pprint(f"shortest paths: {shortest_paths}")
 
+    degree_threshold = calculate_degree_threshold(weighted_graph)
     # Run Advanced K-Means
     num_clusters = 4
-    centroids, clusters = advanced_kmeans(weighted_graph, num_clusters, shortest_paths)
+    centroids, clusters = advanced_kmeans(weighted_graph, num_clusters, shortest_paths, degree_threshold)
 
     print(f"Final Centroids: {centroids}")
     print(f"Clusters: {clusters}")
