@@ -127,7 +127,8 @@ def initialize_centroids(graph, shortest_paths):
 # Advanced K-Means Algorithm
 def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
     """
-    Advanced K-Means algorithm based on the corrected flow of Algorithm 2.
+    Advanced K-Means algorithm that calculates the next centroid and
+    recomputes the final centroid for each cluster in the same while loop.
 
     Args:
         graph (networkx.Graph): The network topology as a graph.
@@ -147,24 +148,9 @@ def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
     clusters = assign_clusters(graph, centroids, shortest_paths)
     print(f"Initial clusters: {clusters}")
 
-    # Step 3: Add remaining centroids iteratively
+    # Step 3: Iteratively calculate centroids and recompute final centroids
     while len(centroids) < k:
-        # Assign nodes to clusters based on the current centroids
-        clusters = assign_clusters(graph, centroids, shortest_paths)
-
-        # Recompute the current cluster's centroid
-        for centroid in centroids:
-            current_cluster = clusters[centroid]
-            valid_candidates = [n for n in current_cluster if graph.degree[n] >= degree_threshold]
-            if valid_candidates:
-                new_centroid = min(
-                    valid_candidates,
-                    key=lambda n: sum(shortest_paths[n][other] for other in current_cluster)
-                )
-                centroids[centroids.index(centroid)] = new_centroid
-                print(f"Refined Centroid {centroid}: {new_centroid}")
-
-        # Select the next centroid
+        # Step 3.1: Calculate the next centroid
         candidate_nodes = [node for node in graph.nodes if node not in centroids]
         next_centroid = max(
             candidate_nodes,
@@ -173,7 +159,25 @@ def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
         centroids.append(next_centroid)
         print(f"Added new centroid {next_centroid}: {centroids}")
 
-    # Step 4: Assign final clusters based on the k centroids
+        # Step 3.2: Assign nodes to clusters based on the updated centroids
+        clusters = assign_clusters(graph, centroids, shortest_paths)
+        print(f"Updated clusters with {len(centroids)} centroids: {clusters}")
+
+        # Step 3.3: Recompute final centroids for each cluster
+        for cluster_centroid in centroids:
+            current_cluster = clusters[cluster_centroid]
+            valid_candidates = [n for n in current_cluster if graph.degree[n] >= degree_threshold]
+            if valid_candidates:
+                # Recompute the final centroid as the node with the minimum sum of distances
+                refined_centroid = min(
+                    valid_candidates,
+                    key=lambda n: sum(shortest_paths[n][other] for other in current_cluster)
+                )
+                # Update the centroid for this cluster
+                centroids[centroids.index(cluster_centroid)] = refined_centroid
+                print(f"Refined Centroid for Cluster {len(centroids)}: {refined_centroid}")
+
+    # Step 4: Final assignment of clusters
     clusters = assign_clusters(graph, centroids, shortest_paths)
 
     return centroids, clusters
