@@ -4,20 +4,11 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from math import radians
 from sklearn.metrics.pairwise import haversine_distances
+import random
+
 def load_latlong(file_path):
     with open(file_path, "r") as f:
         return json.load(f)
-
-
-def validate_positions(graph, latlong):
-    valid_positions = {}
-    for node in graph.nodes:
-        if node in latlong:
-            valid_positions[node] = (float(latlong[node]["Longitude"]), float(latlong[node]["Latitude"]))
-        else:
-            print(f"Warning: No lat/long data for node '{node}'. It will be excluded from the plot.")
-    return valid_positions
-
 
 # Calculate the geographic (Haversine) distance between two points
 def haversine(coord1, coord2):
@@ -27,7 +18,7 @@ def haversine(coord1, coord2):
 
     distance = haversine_distances([[lon1, lat1], [lon2, lat2]]) * r
     # distance is 2D array based on scikit-learn doc
-    print(distance[0][1])
+    #print(distance[0][1])
     return distance[0][1]
 
 
@@ -65,9 +56,6 @@ def build_weighted_graph(latlong):
         if u in latlong and v in latlong:  # Ensure both nodes have valid coordinates
             distance = haversine(latlong[u], latlong[v])  # Calculate geographic distance
             g.add_edge(u, v, weight=distance)
-        else:
-            print(f"Skipping edge ({u}, {v}) due to missing lat/long data.")
-
     return g
 
 
@@ -77,6 +65,7 @@ def compute_shortest_path_distances(weighted_graph):
 
 # Assign nodes to the nearest centroid
 def assign_clusters(graph, centroids, shortest_paths):
+    #print(f"current centroid: {centroids}")
     clusters = {centroid: [] for centroid in centroids}
     for node in graph.nodes:
         nearest_centroid = min(
@@ -105,7 +94,7 @@ def recompute_centroids(clusters, shortest_paths, graph, degree_threshold):
 def initialize_centroids(graph, shortest_paths):
     # Calculate node degrees
     node_degrees = dict(graph.degree())
-    pprint(node_degrees)
+    #pprint(node_degrees)
 
     # Find nodes with the highest degree
     max_degree = max(node_degrees.values())
@@ -128,7 +117,7 @@ def initialize_centroids(graph, shortest_paths):
 def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
     """
     Advanced K-Means algorithm that calculates the next centroid and
-    iteratively refines the current centroid until stabilization.
+    iteratively recomputes the final centroids until stabilization.
 
     Args:
         graph (networkx.Graph): The network topology as a graph.
@@ -142,33 +131,41 @@ def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
     # Step 1: Select the first centroid
     first_centroid = initialize_centroids(graph, shortest_paths)
     centroids = [first_centroid]  # Start with the first centroid
-    print(f"Initial Centroid: {first_centroid}")
+    #print(f"Initial Centroid: {first_centroid}")
 
-    # Step 2: Assign nodes to clusters with the first centroid
+    # Step 2: Initialize clusters with the first centroid
     clusters = assign_clusters(graph, centroids, shortest_paths)
-    print(f"Initial clusters: {clusters}")
+    #print(f"Initial clusters: {clusters}")
 
-    # Step 3: Iteratively calculate centroids and refine one at a time
+    # Step 3: Iteratively calculate centroids and recompute final centroids
     while len(centroids) < k:
         # Step 3.1: Calculate the next centroid
-        candidate_nodes = [node for node in graph.nodes if node not in centroids]
-        next_centroid = max(
-            candidate_nodes,
-            key=lambda n: min(shortest_paths[n][c] for c in centroids)  # Maximize min distance to existing centroids
-        )
-        centroids.append(next_centroid)
-        print(f"Added new centroid {next_centroid}: {centroids}")
+        last_centroid = centroids[-1]  # Focus on the most recently added centroid
+        candidate_nodes = [
+            node for node in graph.nodes
+            if node not in centroids and graph.degree[node] >= degree_threshold
+        ]
+        if candidate_nodes:  # Ensure there are valid candidates
+            next_centroid = max(
+                candidate_nodes,
+                key=lambda n: shortest_paths[n][last_centroid]  # Maximize distance from the last centroid
+            )
+            centroids.append(next_centroid)
+            #print(f"Added new centroid {next_centroid}: {centroids}")
+        else:
+            #print("No valid candidates for the next centroid.")
+            break  # Exit the l
 
-        # Step 3.2: Assign clusters for the new centroid (before refinement)
-        clusters = assign_clusters(graph, centroids, shortest_paths)
-        current_cluster = clusters[next_centroid]  # Focus on the latest added centroid
-
-        # Step 3.3: Refine the current centroid until it stabilizes
+        # Step 3.2: Refine clusters and centroids until stabilization
         while True:
+            # Assign nodes to clusters based on the current centroids
+            clusters = assign_clusters(graph, centroids, shortest_paths)
+            current_cluster = clusters[next_centroid]  # Focus on the latest added centroid
+            #print(f"current cluster: {next_centroid}")
             # Identify valid candidates for the current cluster
             valid_candidates = [n for n in current_cluster if graph.degree[n] >= degree_threshold]
             if valid_candidates:
-                # Recompute the centroid for the current cluster
+                # Compute the sum of shortest path distances to all nodes in the cluster for each valid candidate
                 refined_centroid = min(
                     valid_candidates,
                     key=lambda n: sum(shortest_paths[n][other] for other in current_cluster)
@@ -179,13 +176,12 @@ def advanced_kmeans(graph, k, shortest_paths, degree_threshold):
                     break  # Stop refining if the centroid is stable
                 next_centroid = refined_centroid  # Update the centroid for further refinement
                 centroids[-1] = refined_centroid  # Update the list of centroids
-                print(f"Refined Centroid for Cluster: {refined_centroid}")
+                #print(f"Refined Centroid for Cluster: {refined_centroid}")
 
     # Step 4: Final assignment of clusters
     clusters = assign_clusters(graph, centroids, shortest_paths)
 
     return centroids, clusters
-
 
 
 
@@ -208,7 +204,7 @@ def calculate_degree_threshold(graph):
     # Round the average degree to the nearest integer
     degree_threshold = round(avg_degree)
 
-    print(f"Average Degree: {avg_degree}, Degree Threshold: {degree_threshold}")
+    #print(f"Average Degree: {avg_degree}, Degree Threshold: {degree_threshold}")
     return degree_threshold
 
 def calculate_average_propagation_latency(clusters, centroids, shortest_paths, total_nodes):
@@ -242,6 +238,159 @@ def calculate_average_propagation_latency(clusters, centroids, shortest_paths, t
     return avg_latency
 
 
+def test_k_values_with_maps(graph, latlong, k_values, L1):
+    results = []
+    shortest_paths = compute_shortest_path_distances(graph)
+    degree_threshold = calculate_degree_threshold(graph)
+
+    for k in k_values:
+        #print(f"Testing for k = {k}")
+        centroids, clusters = advanced_kmeans(graph, k, shortest_paths, degree_threshold)
+        avg_latency = calculate_average_propagation_latency(clusters, centroids, shortest_paths, graph.number_of_nodes())
+        cost_benefit_ratio = L1 / (avg_latency * k)
+        results.append((k, cost_benefit_ratio))
+        #print(f"k={k}, Avg Latency={avg_latency:.4f}, Cost/Benefit Ratio={cost_benefit_ratio:.4f}")
+
+        # Draw map for each k
+        pos = {node: (float(latlong[node]["Longitude"]), float(latlong[node]["Latitude"])) for node in graph.nodes}
+        plt.figure(figsize=(14, 10))
+        colors = ["red", "blue", "green", "purple", "orange", "yellow", "pink", "cyan"]
+
+        for cluster_id, centroid in enumerate(centroids):
+            cluster_nodes = clusters[centroid]
+            cluster_pos = {node: pos[node] for node in cluster_nodes if node in pos}
+
+            nx.draw_networkx_nodes(
+                G=graph,
+                pos=cluster_pos,
+                nodelist=cluster_nodes,
+                node_size=300,
+                node_color=colors[cluster_id % len(colors)],
+            )
+            plt.scatter([], [], color=colors[cluster_id % len(colors)], s=100, label=f"Cluster {cluster_id}")
+
+        edges_to_draw = [(u, v) for u, v in graph.edges if u in pos and v in pos]
+        nx.draw_networkx_edges(graph, pos, edgelist=edges_to_draw, edge_color="gray", width=1.5)
+
+        edge_labels = nx.get_edge_attributes(graph, "weight")
+        edge_labels = {edge: f"{distance:.1f} km" for edge, distance in edge_labels.items()}
+        nx.draw_networkx_edge_labels(graph, pos, edge_labels=edge_labels, font_size=8, font_color="blue")
+
+        for centroid in centroids:
+            if centroid in pos:
+                plt.scatter(
+                    pos[centroid][0], pos[centroid][1],
+                    color="black",
+                    s=800,
+                    marker="x",
+                )
+
+        plt.scatter([], [], color="black", s=100, marker="x", label="Centroid")
+        plt.title(f"Clustering Map for k={k}", fontsize=16)
+        plt.legend(scatterpoints=1, loc="upper right")
+        plt.show()
+
+    return results
+
+
+def plot_cost_benefit_ratio(results):
+    k_values, cost_benefit_ratios = zip(*results)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(k_values, cost_benefit_ratios, marker='o', label='Cost/Benefit Ratio')
+    plt.xlabel('Number of Controllers (k)')
+    plt.ylabel('Cost/Benefit Ratio')
+    plt.title('Cost/Benefit Ratio vs. Number of Controllers (k)')
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+def calculate_randomized_latency(graph, k, latlong, shortest_paths, total_nodes):
+    """
+    Calculate the average propagation latency over 9 randomizations for a given k.
+
+    Args:
+        graph (networkx.Graph): The network topology as a graph.
+        k (int): Number of clusters (controllers).
+        latlong (dict): Dictionary of lat/long for each node.
+        shortest_paths (dict): Precomputed shortest path distances.
+        total_nodes (int): Total number of nodes in the network.
+
+    Returns:
+        float: Average latency over 9 random runs.
+    """
+    latencies = []
+    for i in range(9):
+        # Choose k random centers
+        random_centers = random.sample(list(graph.nodes), k)
+        # Assign clusters based on random centers
+        clusters = assign_clusters(graph, random_centers, shortest_paths)
+        # Calculate latency
+        latency = calculate_average_propagation_latency(clusters, random_centers, shortest_paths, total_nodes)
+        latencies.append(latency)
+        #print(f"Random run {i+1}, Latency: {latency:.4f}")
+    # Return the average latency
+    return sum(latencies) / len(latencies)
+
+
+def test_k_values_with_randomization(graph, latlong, k_values, L1):
+    """
+    Test k values for both Advanced K-Means and randomized centers,
+    and calculate the average propagation latency.
+
+    Args:
+        graph (networkx.Graph): The network topology as a graph.
+        latlong (dict): Dictionary of lat/long for each node.
+        k_values (range): Range of k values to test.
+        L1 (float): Baseline latency.
+
+    Returns:
+        list: Results containing k, advanced latency, random latency, and cost-benefit ratios.
+    """
+    results = []
+    shortest_paths = compute_shortest_path_distances(graph)
+    degree_threshold = calculate_degree_threshold(graph)
+
+    for k in k_values:
+        print(f"Testing for k = {k}")
+        # Advanced K-Means latency
+        centroids, clusters = advanced_kmeans(graph, k, shortest_paths, degree_threshold)
+        advanced_latency = calculate_average_propagation_latency(clusters, centroids, shortest_paths, graph.number_of_nodes())
+        cost_benefit_ratio_advanced = L1 / (advanced_latency * k)
+
+        # Randomized latency
+        random_latency = calculate_randomized_latency(graph, k, latlong, shortest_paths, graph.number_of_nodes())
+        cost_benefit_ratio_random = L1 / (random_latency * k)
+
+        results.append((k, advanced_latency, random_latency, cost_benefit_ratio_advanced, cost_benefit_ratio_random))
+        print(f"k={k}, Advanced Latency={advanced_latency:.4f}, Random Latency={random_latency:.4f}")
+        print(f"Advanced Cost/Benefit Ratio={cost_benefit_ratio_advanced:.4f}, Random Cost/Benefit Ratio={cost_benefit_ratio_random:.4f}")
+    return results
+
+
+def plot_latency_ratio(results):
+    """
+    Plot the ratio of Randomized Latency to Advanced K-Means Latency as a bar graph.
+
+    Args:
+        results (list): Results containing k, advanced latency, and random latency.
+    """
+    k_values, advanced_latencies, random_latencies, _, _ = zip(*results)
+    # Calculate the ratio of Randomized Latency to Advanced Latency
+    latency_ratios = [random / advanced for random, advanced in zip(random_latencies, advanced_latencies)]
+
+    # Plot the bar graph
+    plt.figure(figsize=(10, 6))
+    plt.bar(k_values, latency_ratios, color='skyblue', edgecolor='black')
+    plt.xlabel('Number of Controllers (k)')
+    plt.ylabel('Ratio of Randomized to Advanced Latency')
+    plt.title('Ratio of Randomized Latency to Advanced K-Means Latency')
+    plt.xticks(k_values)  # Ensure x-axis shows all k values
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.show()
+
+
+
 
 def main():
     json_file_path = "latlong.json"
@@ -250,61 +399,21 @@ def main():
     # Build the weighted graph directly
     weighted_graph = build_weighted_graph(latlong)
 
-    # Compute shortest path distances
-    shortest_paths = compute_shortest_path_distances(weighted_graph)
-    pprint(f"shortest paths: {shortest_paths}")
+    # Define the reference latency (L1)
+    L1 = 1588.075  # Example baseline value from your setup
 
-    degree_threshold = calculate_degree_threshold(weighted_graph)
-    # Run Advanced K-Means
-    num_clusters = 2
-    centroids, clusters = advanced_kmeans(weighted_graph, num_clusters, shortest_paths, degree_threshold)
+    # Test for k values from 1 to 8
+    k_values = range(1, 9)
+    results = test_k_values_with_randomization(weighted_graph, latlong, k_values, L1)
 
-    print(f"Final Centroids: {centroids}")
-    print(f"Clusters: {clusters}")
+    # Plot the latency comparison
+    plot_latency_ratio( results)
 
-    L1 = 1588.075
-    L = calculate_average_propagation_latency(clusters, centroids, shortest_paths, weighted_graph.number_of_nodes())
-    print(f"Average propagation latency: {calculate_average_propagation_latency(clusters, centroids, shortest_paths, weighted_graph.number_of_nodes())}")
-    print(f"cost/benefit ratio: {L1/L/num_clusters}")
-    # Draw the graph with geographic positions
-    pos = {node: (float(latlong[node]["Longitude"]), float(latlong[node]["Latitude"])) for node in weighted_graph.nodes}
-    plt.figure(figsize=(14, 10))
-    colors = ["red", "blue", "green", "purple", "orange"]
 
-    # Draw nodes with cluster colors
-    for cluster_id, centroid in enumerate(centroids):
-        cluster_nodes = clusters[centroid]
-        cluster_pos = {node: pos[node] for node in cluster_nodes if node in pos}
+    results = test_k_values_with_maps(weighted_graph, latlong, k_values, L1)
 
-        nx.draw_networkx_nodes(
-            G=weighted_graph,
-            pos=cluster_pos,
-            nodelist=cluster_nodes,
-            node_size=300,
-            node_color=colors[cluster_id % len(colors)],
-        )
-        plt.scatter([], [], color=colors[cluster_id % len(colors)], s=100, label=f"Cluster {cluster_id}")
-
-    edges_to_draw = [(u, v) for u, v in weighted_graph.edges if u in pos and v in pos]
-    nx.draw_networkx_edges(weighted_graph, pos, edgelist=edges_to_draw, edge_color="gray", width=1.5)
-
-    edge_labels = nx.get_edge_attributes(weighted_graph, "weight")  # Get the 'weight' (distance) attribute
-    edge_labels = {edge: f"{distance:.1f} km" for edge, distance in edge_labels.items()}  # Format distances
-    nx.draw_networkx_edge_labels(weighted_graph, pos, edge_labels=edge_labels, font_size=8, font_color="blue")
-
-    for centroid in centroids:
-        if centroid in pos:
-            plt.scatter(
-                pos[centroid][0], pos[centroid][1],
-                color="black",
-                s=800,
-                marker="x",
-            )
-
-    plt.scatter([], [], color="black", s=100, marker="x", label="Centroid")
-    plt.title("Advanced K-Means with Geographic Distances for SDN Controller Placement", fontsize=16)
-    plt.legend(scatterpoints=1, loc="upper right")
-    plt.show()
+    # Plot the Cost/Benefit Ratio
+    plot_cost_benefit_ratio(results)
 
 if __name__ == "__main__":
     main()
